@@ -1,12 +1,12 @@
 import os
 import logging
-import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from pydub import AudioSegment
 from io import BytesIO
 import instaloader
 from uuid import uuid4
+import asyncio
 
 # Enable logging
 logging.basicConfig(
@@ -30,7 +30,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Convert video to MP3 using pydub with progress updates"""
+    """Convert video to MP3 using pydub"""
     if not update.message.reply_to_message or not update.message.reply_to_message.video:
         await update.message.reply_text("Please reply to a video file with /convert")
         return
@@ -51,33 +51,11 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await context.bot.edit_message_text(
             chat_id=update.message.chat_id,
             message_id=status_msg.message_id,
-            text="🔧 Converting video to MP3 (this may take a while for large files)..."
+            text="🔧 Converting video to MP3..."
         )
         
         # Convert to MP3 using pydub
         audio = AudioSegment.from_file(BytesIO(video_bytes), format="mp4")
-        
-        # Estimate duration for progress
-        duration_sec = len(audio) / 1000  # pydub works in milliseconds
-        if duration_sec > 30:  # Only show progress for longer files
-            await context.bot.edit_message_text(
-                chat_id=update.message.chat_id,
-                message_id=status_msg.message_id,
-                text=f"🔧 Converting: 0% (0/{int(duration_sec)} sec)"
-            )
-            
-            # This is a fake progress since pydub doesn't provide callbacks
-            # But we'll update periodically to show something is happening
-            for i in range(1, 6):
-                await asyncio.sleep(duration_sec/5)  # Simulate progress
-                percent = i * 20
-                await context.bot.edit_message_text(
-                    chat_id=update.message.chat_id,
-                    message_id=status_msg.message_id,
-                    text=f"🔧 Converting: {percent}% ({int(duration_sec*i/5)}/{int(duration_sec)} sec)"
-                )
-        
-        # Export the file
         audio.export(output_filename, format="mp3")
         
         # Update status
@@ -88,10 +66,7 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         
         # Send the MP3 file
-        await update.message.reply_audio(
-            audio=open(output_filename, 'rb'),
-            caption="Here's your converted MP3 file!"
-        )
+        await update.message.reply_audio(audio=open(output_filename, 'rb'))
         
         # Clean up
         if os.path.exists(output_filename):
@@ -106,7 +81,6 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.error(f"Error converting video: {e}")
         await update.message.reply_text("Sorry, I couldn't convert that video. Please try again.")
-        # Delete status message if it exists
         if 'status_msg' in locals():
             try:
                 await context.bot.delete_message(
@@ -157,25 +131,34 @@ async def download_reel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Error downloading reel: {e}")
         await update.message.reply_text("Sorry, I couldn't download that reel. Please check the URL and try again.")
 
-def main() -> None:
-    """Start the bot."""
+def run_bot() -> None:
+    """Run the bot with proper event loop handling."""
     # Verify token is set
     if TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
         print("ERROR: You need to set your Telegram bot token!")
         print("Get one from @BotFather and replace in the code")
         return
     
-    # Create the Application
-    application = Application.builder().token(TOKEN).build()
+    # Create a new event loop for the thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Create the Application
+        application = Application.builder().token(TOKEN).build()
 
-    # Command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("convert", convert_to_mp3))
-    application.add_handler(CommandHandler("reel", download_reel))
+        # Command handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("convert", convert_to_mp3))
+        application.add_handler(CommandHandler("reel", download_reel))
 
-    # Run the bot
-    print("Bot is running... Press Ctrl+C to stop")
-    application.run_polling()
+        # Run the bot
+        print("Bot is running... Press Ctrl+C to stop")
+        application.run_polling()
+    except Exception as e:
+        logger.error(f"Bot error: {e}")
+    finally:
+        loop.close()
 
 if __name__ == '__main__':
-    main()
+    run_bot()
