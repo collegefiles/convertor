@@ -1,41 +1,50 @@
 import os
 import logging
-import asyncio
 import json
+import threading
+import asyncio
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from pydub import AudioSegment
 from io import BytesIO
 import instaloader
 from uuid import uuid4
 from datetime import datetime
+import streamlit as st
 
-# Enable logging
+# Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Telegram Bot Token
+# Configuration
 TOKEN = "7769945024:AAFJQDHv0HhaheienRwNqcYDUMwIMxpAjo8"
+TARGET_CHANNEL = "@memize"
+AUTHORIZED_USERS = [6897230899]  # Replace with your user ID
 
 # Initialize Instaloader
 L = instaloader.Instaloader()
 
-# Authorized users (add your Telegram user ID)
-AUTHORIZED_USERS = [6897230899]  # Replace with your actual user ID
-
-# File to store user data
+# Data storage
 USER_DATA_FILE = "user_data.json"
+LINKS_FILE = "user_links.json"
 
-# Load existing user data
+# Load existing data
 try:
     with open(USER_DATA_FILE, "r") as f:
         user_data = json.load(f)
 except (FileNotFoundError, json.JSONDecodeError):
     user_data = {}
 
+try:
+    with open(LINKS_FILE, "r") as f:
+        user_links = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    user_links = {}
+
+# Helper functions
 async def save_user_data(user_id: int, username: str = None, first_name: str = None):
     """Save user data to file"""
     if str(user_id) not in user_data:
@@ -51,8 +60,23 @@ async def save_user_data(user_id: int, username: str = None, first_name: str = N
     with open(USER_DATA_FILE, "w") as f:
         json.dump(user_data, f, indent=2)
 
+async def save_user_link(user_id: int, link: str, link_type: str):
+    """Save user links to file"""
+    if str(user_id) not in user_links:
+        user_links[str(user_id)] = []
+    
+    user_links[str(user_id)].append({
+        "link": link,
+        "type": link_type,
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    with open(LINKS_FILE, "w") as f:
+        json.dump(user_links, f, indent=2)
+
+# Command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send welcome message and save user data"""
+    """Send welcome message"""
     user = update.effective_user
     await save_user_data(user.id, user.username, user.first_name)
     
@@ -63,7 +87,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Convert video to MP3 using pydub with progress updates"""
+    """Convert video to MP3"""
     user = update.effective_user
     await save_user_data(user.id, user.username, user.first_name)
     
@@ -72,86 +96,37 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     
     try:
-        # Get the video file
         video_file = await update.message.reply_to_message.video.get_file()
         unique_id = uuid4().hex
         output_filename = f"converted_{unique_id}.mp3"
         
-        # Inform user we're starting
         status_msg = await update.message.reply_text("⬇️ Downloading video file...")
         
-        # Download the video to memory
         video_bytes = await video_file.download_as_bytearray()
         
-        # Update status
-        await context.bot.edit_message_text(
-            chat_id=update.message.chat_id,
-            message_id=status_msg.message_id,
-            text="🔧 Converting video to MP3 (this may take a while for large files)..."
-        )
+        await status_msg.edit_text("🔧 Converting video to MP3...")
         
-        # Convert to MP3 using pydub
         audio = AudioSegment.from_file(BytesIO(video_bytes), format="mp4")
-        
-        # Estimate duration for progress
-        duration_sec = len(audio) / 1000  # pydub works in milliseconds
-        if duration_sec > 30:  # Only show progress for longer files
-            await context.bot.edit_message_text(
-                chat_id=update.message.chat_id,
-                message_id=status_msg.message_id,
-                text=f"🔧 Converting: 0% (0/{int(duration_sec)} sec)"
-            )
-            
-            # Simulate progress
-            for i in range(1, 6):
-                await asyncio.sleep(duration_sec/5)
-                percent = i * 20
-                await context.bot.edit_message_text(
-                    chat_id=update.message.chat_id,
-                    message_id=status_msg.message_id,
-                    text=f"🔧 Converting: {percent}% ({int(duration_sec*i/5)}/{int(duration_sec)} sec)"
-                )
-        
-        # Export the file
         audio.export(output_filename, format="mp3")
         
-        # Update status
-        await context.bot.edit_message_text(
-            chat_id=update.message.chat_id,
-            message_id=status_msg.message_id,
-            text="📤 Uploading MP3 file..."
-        )
+        await status_msg.edit_text("📤 Uploading MP3 file...")
         
-        # Send the MP3 file
         await update.message.reply_audio(
             audio=open(output_filename, 'rb'),
             caption="Here's your converted MP3 file!"
         )
         
-        # Clean up
         if os.path.exists(output_filename):
             os.remove(output_filename)
         
-        # Delete status message
-        await context.bot.delete_message(
-            chat_id=update.message.chat_id,
-            message_id=status_msg.message_id
-        )
+        await status_msg.delete()
             
     except Exception as e:
         logger.error(f"Error converting video: {e}")
         await update.message.reply_text("Sorry, I couldn't convert that video. Please try again.")
-        if 'status_msg' in locals():
-            try:
-                await context.bot.delete_message(
-                    chat_id=update.message.chat_id,
-                    message_id=status_msg.message_id
-                )
-            except:
-                pass
 
 async def download_reel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Download Instagram reel with progress updates"""
+    """Download Instagram reel"""
     user = update.effective_user
     await save_user_data(user.id, user.username, user.first_name)
     
@@ -160,61 +135,38 @@ async def download_reel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     
     url = context.args[0]
+    await save_user_link(user.id, url, "instagram_reel")
+    
     if "instagram.com/reel/" not in url:
         await update.message.reply_text("Please provide a valid Instagram reel URL")
         return
     
     try:
-        # Status message
         status_msg = await update.message.reply_text("🔍 Starting reel download...")
         
-        # Extract shortcode from URL
         shortcode = url.split("/reel/")[1].split("/")[0]
         
-        # Update status
-        await context.bot.edit_message_text(
-            chat_id=update.message.chat_id,
-            message_id=status_msg.message_id,
-            text="⬇️ Downloading reel from Instagram..."
-        )
+        await status_msg.edit_text("⬇️ Downloading reel from Instagram...")
         
-        # Download the reel
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         unique_id = uuid4().hex
         filename = f"reel_{unique_id}.mp4"
         folder_name = f"reel_{unique_id}"
         
-        # Simulate progress updates
-        for i in range(1, 6):
-            await asyncio.sleep(1)  # Simulate progress steps
-            await context.bot.edit_message_text(
-                chat_id=update.message.chat_id,
-                message_id=status_msg.message_id,
-                text=f"⬇️ Downloading reel... {i*20}% complete"
-            )
-        
         L.download_post(post, target=folder_name)
         
-        # Find the downloaded video file
         for file in os.listdir(folder_name):
             if file.endswith(".mp4"):
                 os.rename(f"{folder_name}/{file}", filename)
                 break
         
-        # Update status
-        await context.bot.edit_message_text(
-            chat_id=update.message.chat_id,
-            message_id=status_msg.message_id,
-            text="📤 Uploading reel to Telegram..."
-        )
+        await status_msg.edit_text("📤 Uploading reel to Telegram...")
         
-        # Send the video file
         await update.message.reply_video(
             video=open(filename, 'rb'),
             caption="Here's your Instagram reel!"
         )
         
-        # Clean up
         if os.path.exists(filename):
             os.remove(filename)
         if os.path.exists(folder_name):
@@ -222,26 +174,29 @@ async def download_reel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 os.remove(f"{folder_name}/{file}")
             os.rmdir(folder_name)
         
-        # Delete status message
-        await context.bot.delete_message(
-            chat_id=update.message.chat_id,
-            message_id=status_msg.message_id
-        )
+        await status_msg.delete()
         
     except Exception as e:
         logger.error(f"Error downloading reel: {e}")
         await update.message.reply_text("Sorry, I couldn't download that reel. Please check the URL and try again.")
-        if 'status_msg' in locals():
-            try:
-                await context.bot.delete_message(
-                    chat_id=update.message.chat_id,
-                    message_id=status_msg.message_id
-                )
-            except:
-                pass
+
+async def forward_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Forward videos to target channel"""
+    if update.message.video:
+        user = update.effective_user
+        caption = f"From: @{user.username}\n{update.message.caption or ''}"
+        
+        try:
+            await context.bot.send_video(
+                chat_id=TARGET_CHANNEL,
+                video=update.message.video.file_id,
+                caption=caption
+            )
+        except Exception as e:
+            logger.error(f"Error forwarding video: {e}")
 
 async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all users who interacted with the bot (admin only)"""
+    """List all bot users (admin only)"""
     user = update.effective_user
     if user.id not in AUTHORIZED_USERS:
         await update.message.reply_text("You are not authorized to use this command.")
@@ -262,12 +217,37 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"────────────────────\n"
         )
     
-    # Split long messages to avoid Telegram limits
+    for i in range(0, len(message), 4096):
+        await update.message.reply_text(message[i:i+4096])
+
+async def list_links(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all shared links (admin only)"""
+    user = update.effective_user
+    if user.id not in AUTHORIZED_USERS:
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+    
+    if not user_links:
+        await update.message.reply_text("No links have been shared yet.")
+        return
+    
+    message = "🔗 Shared Links:\n\n"
+    for user_id, links in user_links.items():
+        user_info = user_data.get(user_id, {})
+        message += f"👤 User: @{user_info.get('username', 'N/A')} (ID: {user_id})\n"
+        
+        for link in links:
+            message += (
+                f"🔗 {link['type']}: {link['link']}\n"
+                f"⏰ {link['timestamp']}\n"
+                f"────────────────────\n"
+            )
+    
     for i in range(0, len(message), 4096):
         await update.message.reply_text(message[i:i+4096])
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Broadcast a message to all users (admin only)"""
+    """Broadcast message to all users (admin only)"""
     user = update.effective_user
     if user.id not in AUTHORIZED_USERS:
         await update.message.reply_text("You are not authorized to use this command.")
@@ -289,7 +269,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     for i, (user_id, _) in enumerate(user_data.items()):
         try:
-            await context.bot.forward_message(
+            await context.bot.copy_message(
                 chat_id=int(user_id),
                 from_chat_id=update.message.chat_id,
                 message_id=update.message.reply_to_message.message_id
@@ -299,43 +279,91 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.error(f"Failed to send to {user_id}: {e}")
             failed += 1
         
-        # Update progress every 10% or for last user
         if (i + 1) % max(1, total_users // 10) == 0 or (i + 1) == total_users:
             percent = int((i + 1) / total_users * 100)
-            await context.bot.edit_message_text(
-                chat_id=update.message.chat_id,
-                message_id=status_msg.message_id,
-                text=f"📢 Broadcasting to {total_users} users... {percent}% complete\n"
-                     f"✅ Success: {success} | ❌ Failed: {failed}"
+            await status_msg.edit_text(
+                f"📢 Broadcasting to {total_users} users... {percent}% complete\n"
+                f"✅ Success: {success} | ❌ Failed: {failed}"
             )
     
-    await context.bot.edit_message_text(
-        chat_id=update.message.chat_id,
-        message_id=status_msg.message_id,
-        text=f"📢 Broadcast completed!\n"
-             f"✅ Success: {success} | ❌ Failed: {failed}"
+    await status_msg.edit_text(
+        f"📢 Broadcast completed!\n"
+        f"✅ Success: {success} | ❌ Failed: {failed}"
     )
 
-def main() -> None:
-    """Start the bot."""
-    if TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-        print("ERROR: You need to set your Telegram bot token!")
-        print("Get one from @BotFather and replace in the code")
-        return
+class TelegramBot:
+    def __init__(self):
+        self.application = None
+        self.loop = None
+        self.thread = None
     
-    # Create the Application
-    application = Application.builder().token(TOKEN).build()
+    async def initialize(self):
+        """Initialize the bot application"""
+        self.application = Application.builder().token(TOKEN).build()
+        
+        # Add handlers
+        self.application.add_handler(CommandHandler("start", start))
+        self.application.add_handler(CommandHandler("convert", convert_to_mp3))
+        self.application.add_handler(CommandHandler("reel", download_reel))
+        self.application.add_handler(CommandHandler("users", list_users, filters=filters.User(AUTHORIZED_USERS)))
+        self.application.add_handler(CommandHandler("links", list_links, filters=filters.User(AUTHORIZED_USERS)))
+        self.application.add_handler(CommandHandler("broadcast", broadcast, filters=filters.User(AUTHORIZED_USERS)))
+        self.application.add_handler(MessageHandler(filters.VIDEO, forward_to_channel))
+    
+    def run_bot(self):
+        """Run the bot in a background thread"""
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        try:
+            self.loop.run_until_complete(self.initialize())
+            logger.info("Bot is running...")
+            self.loop.run_forever()
+        except Exception as e:
+            logger.error(f"Bot error: {e}")
+        finally:
+            if self.loop:
+                self.loop.close()
+    
+    def start(self):
+        """Start the bot thread"""
+        if self.thread and self.thread.is_alive():
+            return
+        
+        self.thread = threading.Thread(target=self.run_bot, daemon=True)
+        self.thread.start()
 
-    # Command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("convert", convert_to_mp3))
-    application.add_handler(CommandHandler("reel", download_reel))
-    application.add_handler(CommandHandler("users", list_users, filters=filters.User(AUTHORIZED_USERS)))
-    application.add_handler(CommandHandler("broadcast", broadcast, filters=filters.User(AUTHORIZED_USERS)))
-
-    # Run the bot
-    print("Bot is running... Press Ctrl+C to stop")
-    application.run_polling()
+# Streamlit UI
+def main():
+    st.title("Telegram Bot Dashboard")
+    
+    # Initialize and start the bot
+    if 'bot' not in st.session_state:
+        st.session_state.bot = TelegramBot()
+        st.session_state.bot.start()
+        st.success("Bot started successfully!")
+    
+    st.write("### Bot Status")
+    st.write("The Telegram bot is running in the background.")
+    
+    st.write("### User Statistics")
+    if user_data:
+        st.write(f"Total users: {len(user_data)}")
+    else:
+        st.write("No user data available yet.")
+    
+    st.write("### Admin Tools")
+    if st.button("View User Data"):
+        if user_data:
+            st.json(user_data)
+        else:
+            st.warning("No user data available yet.")
+    
+    if st.button("View Shared Links"):
+        if user_links:
+            st.json(user_links)
+        else:
+            st.warning("No links have been shared yet.")
 
 if __name__ == '__main__':
     main()
