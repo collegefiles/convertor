@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from pydub import AudioSegment
@@ -14,8 +15,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Telegram Bot Token - REPLACE THIS WITH YOUR ACTUAL TOKEN
-TOKEN = "7769945024:AAFJQDHv0HhaheienRwNqcYDUMwIMxpAjo8"  # Get from @BotFather
+# Telegram Bot Token
+TOKEN = "7769945024:AAFJQDHv0HhaheienRwNqcYDUMwIMxpAjo8"
 
 # Initialize Instaloader
 L = instaloader.Instaloader()
@@ -35,22 +36,17 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     
     try:
-        # Get the video file
         video_file = await update.message.reply_to_message.video.get_file()
         unique_id = uuid4().hex
         output_filename = f"converted_{unique_id}.mp3"
         
-        # Download the video to memory
         video_bytes = await video_file.download_as_bytearray()
         
-        # Convert to MP3 using pydub
         audio = AudioSegment.from_file(BytesIO(video_bytes), format="mp4")
         audio.export(output_filename, format="mp3")
         
-        # Send the MP3 file
         await update.message.reply_audio(audio=open(output_filename, 'rb'))
         
-        # Clean up
         if os.path.exists(output_filename):
             os.remove(output_filename)
             
@@ -70,26 +66,20 @@ async def download_reel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     
     try:
-        # Extract shortcode from URL
         shortcode = url.split("/reel/")[1].split("/")[0]
-        
-        # Download the reel
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         unique_id = uuid4().hex
         filename = f"reel_{unique_id}.mp4"
         
         L.download_post(post, target=f"reel_{unique_id}")
         
-        # Find the downloaded video file
         for file in os.listdir(f"reel_{unique_id}"):
             if file.endswith(".mp4"):
                 os.rename(f"reel_{unique_id}/{file}", filename)
                 break
         
-        # Send the video file
         await update.message.reply_video(video=open(filename, 'rb'))
         
-        # Clean up
         if os.path.exists(filename):
             os.remove(filename)
         if os.path.exists(f"reel_{unique_id}"):
@@ -99,25 +89,29 @@ async def download_reel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Error downloading reel: {e}")
         await update.message.reply_text("Sorry, I couldn't download that reel. Please check the URL and try again.")
 
-def main() -> None:
-    """Start the bot."""
-    # Verify token is set
+def run_bot():
+    """Run the bot with proper event loop handling"""
     if TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
         print("ERROR: You need to set your Telegram bot token!")
         print("Get one from @BotFather and replace in the code")
         return
     
-    # Create the Application
-    application = Application.builder().token(TOKEN).build()
-
-    # Command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("convert", convert_to_mp3))
-    application.add_handler(CommandHandler("reel", download_reel))
-
-    # Run the bot
-    print("Bot is running... Press Ctrl+C to stop")
-    application.run_polling()
+    # Create a new event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        application = Application.builder().token(TOKEN).build()
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("convert", convert_to_mp3))
+        application.add_handler(CommandHandler("reel", download_reel))
+        
+        logger.info("Bot is running...")
+        application.run_polling()
+    except Exception as e:
+        logger.error(f"Bot error: {e}")
+    finally:
+        loop.close()
 
 if __name__ == '__main__':
-    main()
+    run_bot()
