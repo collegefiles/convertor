@@ -1,12 +1,17 @@
 import os
 import logging
 import asyncio
+import threading
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from pydub import AudioSegment
 from io import BytesIO
 import instaloader
 from uuid import uuid4
+import warnings
+
+# Suppress pydub warnings about ffmpeg
+warnings.filterwarnings("ignore", message="Couldn't find ffmpeg or avconv")
 
 # Enable logging
 logging.basicConfig(
@@ -89,29 +94,43 @@ async def download_reel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Error downloading reel: {e}")
         await update.message.reply_text("Sorry, I couldn't download that reel. Please check the URL and try again.")
 
-def run_bot():
-    """Run the bot with proper event loop handling"""
-    if TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-        print("ERROR: You need to set your Telegram bot token!")
-        print("Get one from @BotFather and replace in the code")
-        return
-    
-    # Create a new event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    try:
-        application = Application.builder().token(TOKEN).build()
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("convert", convert_to_mp3))
-        application.add_handler(CommandHandler("reel", download_reel))
+class BotRunner:
+    def __init__(self):
+        self.loop = asyncio.new_event_loop()
+        self.application = None
+        self.thread = None
+
+    def run_bot(self):
+        """Run the bot in its own event loop"""
+        asyncio.set_event_loop(self.loop)
         
-        logger.info("Bot is running...")
-        application.run_polling()
-    except Exception as e:
-        logger.error(f"Bot error: {e}")
-    finally:
-        loop.close()
+        try:
+            self.application = Application.builder().token(TOKEN).build()
+            
+            self.application.add_handler(CommandHandler("start", start))
+            self.application.add_handler(CommandHandler("convert", convert_to_mp3))
+            self.application.add_handler(CommandHandler("reel", download_reel))
+            
+            logger.info("Bot is running...")
+            self.loop.run_until_complete(self.application.run_polling())
+        except Exception as e:
+            logger.error(f"Bot error: {e}")
+        finally:
+            self.loop.close()
+
+    def start(self):
+        """Start the bot in a background thread"""
+        if self.thread and self.thread.is_alive():
+            return
+        
+        self.thread = threading.Thread(target=self.run_bot, daemon=True)
+        self.thread.start()
+
+# Initialize and start the bot when imported
+bot_runner = BotRunner()
+bot_runner.start()
 
 if __name__ == '__main__':
-    run_bot()
+    # For standalone execution
+    bot = BotRunner()
+    bot.run_bot()
