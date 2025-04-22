@@ -10,7 +10,7 @@ from io import BytesIO
 import instaloader
 from uuid import uuid4
 from datetime import datetime
-import streamlit as st
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-TOKEN = "7769945024:AAFJQDHv0HhaheienRwNqcYDUMwIMxpAjo8"
+TOKEN = "8153196269:AAFKqb9ztv9fOQuaTMN6DnQ29FLO7EDnxnE"
 TARGET_CHANNEL = "@memize"
 AUTHORIZED_USERS = [6897230899]  # Replace with your user ID
 
@@ -296,6 +296,7 @@ class TelegramBot:
         self.application = None
         self.loop = None
         self.thread = None
+        self.stop_event = threading.Event()
     
     async def initialize(self):
         """Initialize the bot application"""
@@ -309,6 +310,18 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("links", list_links, filters=filters.User(AUTHORIZED_USERS)))
         self.application.add_handler(CommandHandler("broadcast", broadcast, filters=filters.User(AUTHORIZED_USERS)))
         self.application.add_handler(MessageHandler(filters.VIDEO, forward_to_channel))
+        
+        # Start the bot
+        await self.application.initialize()
+        await self.application.start()
+        
+        # Keep running until stopped
+        while not self.stop_event.is_set():
+            await asyncio.sleep(1)
+        
+        # Clean up
+        await self.application.stop()
+        await self.application.shutdown()
     
     def run_bot(self):
         """Run the bot in a background thread"""
@@ -317,8 +330,6 @@ class TelegramBot:
         
         try:
             self.loop.run_until_complete(self.initialize())
-            logger.info("Bot is running...")
-            self.loop.run_forever()
         except Exception as e:
             logger.error(f"Bot error: {e}")
         finally:
@@ -332,38 +343,31 @@ class TelegramBot:
         
         self.thread = threading.Thread(target=self.run_bot, daemon=True)
         self.thread.start()
+    
+    def stop(self):
+        """Stop the bot"""
+        self.stop_event.set()
 
-# Streamlit UI
-def main():
-    st.title("Telegram Bot Dashboard")
+# Streamlit app placeholder
+def run_streamlit_app():
+    """Minimal Streamlit app to keep the process running"""
+    import streamlit as st
+    st.title("Telegram Bot is Running")
+    st.write("The bot is running in the background.")
+    st.write("This page is just a placeholder to keep the process alive.")
     
-    # Initialize and start the bot
-    if 'bot' not in st.session_state:
-        st.session_state.bot = TelegramBot()
-        st.session_state.bot.start()
-        st.success("Bot started successfully!")
+    # Display bot status
+    bot_status = st.empty()
     
-    st.write("### Bot Status")
-    st.write("The Telegram bot is running in the background.")
-    
-    st.write("### User Statistics")
-    if user_data:
-        st.write(f"Total users: {len(user_data)}")
-    else:
-        st.write("No user data available yet.")
-    
-    st.write("### Admin Tools")
-    if st.button("View User Data"):
-        if user_data:
-            st.json(user_data)
-        else:
-            st.warning("No user data available yet.")
-    
-    if st.button("View Shared Links"):
-        if user_links:
-            st.json(user_links)
-        else:
-            st.warning("No links have been shared yet.")
+    # Keep the app running
+    while True:
+        bot_status.write(f"Bot is running... Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        time.sleep(1)
 
 if __name__ == '__main__':
-    main()
+    # Start the bot
+    bot = TelegramBot()
+    bot.start()
+    
+    # Start the Streamlit app (this will block)
+    run_streamlit_app()
