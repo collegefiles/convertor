@@ -1,5 +1,3 @@
-sudo apt-get install ffmpeg  # For Linux
-brew install ffmpeg          # For Mac
 python-telegram-bot==20.3
 pydub==0.25.1
 instaloader==4.10
