@@ -1,15 +1,15 @@
 import os
 import logging
-import threading
 import asyncio
+from threading import Thread
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, ApplicationBuilder
 from pydub import AudioSegment
 from io import BytesIO
 import instaloader
 from uuid import uuid4
 
-# Enable logging
+# Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -25,18 +25,17 @@ L = instaloader.Instaloader()
 class TelegramBot:
     def __init__(self):
         self.application = None
-        self.bot_thread = None
+        self.loop = asyncio.new_event_loop()
+        self.thread = None
 
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Send welcome message"""
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Hi! I'm your media bot. I can:\n"
             "1. Convert videos to MP3 - reply to a video with /convert\n"
             "2. Download Instagram reels - send /reel <URL>"
         )
 
-    async def convert_to_mp3(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Convert video to MP3 using pydub"""
+    async def convert_to_mp3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message.reply_to_message or not update.message.reply_to_message.video:
             await update.message.reply_text("Please reply to a video file with /convert")
             return
@@ -47,7 +46,6 @@ class TelegramBot:
             output_filename = f"converted_{unique_id}.mp3"
             
             status_msg = await update.message.reply_text("⬇️ Downloading video file...")
-            
             video_bytes = await video_file.download_as_bytearray()
             
             await context.bot.edit_message_text(
@@ -78,17 +76,8 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error converting video: {e}")
             await update.message.reply_text("Sorry, I couldn't convert that video. Please try again.")
-            if 'status_msg' in locals():
-                try:
-                    await context.bot.delete_message(
-                        chat_id=update.message.chat_id,
-                        message_id=status_msg.message_id
-                    )
-                except:
-                    pass
 
-    async def download_reel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Download Instagram reel"""
+    async def download_reel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.args:
             await update.message.reply_text("Please send the Instagram reel URL after /reel command")
             return
@@ -124,14 +113,12 @@ class TelegramBot:
 
     def run_bot(self):
         """Run the bot in its own event loop"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        asyncio.set_event_loop(self.loop)
         
         try:
-            self.application = Application.builder().token(TOKEN).build()
+            self.application = ApplicationBuilder().token(TOKEN).build()
             
-            # Register handlers with instance methods
-            self.application.add_handler(CommandHandler("start", self.start))
+            self.application.add_handler(CommandHandler("start", self.start_command))
             self.application.add_handler(CommandHandler("convert", self.convert_to_mp3))
             self.application.add_handler(CommandHandler("reel", self.download_reel))
             
@@ -140,21 +127,21 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Bot error: {e}")
         finally:
-            loop.close()
+            self.loop.close()
 
-    def start_in_thread(self):
-        """Start the bot in a separate thread"""
-        if self.bot_thread and self.bot_thread.is_alive():
+    def start(self):
+        """Start the bot in a background thread"""
+        if self.thread and self.thread.is_alive():
             return
         
-        self.bot_thread = threading.Thread(target=self.run_bot, daemon=True)
-        self.bot_thread.start()
+        self.thread = Thread(target=self.run_bot, daemon=True)
+        self.thread.start()
 
-# Create and start the bot when imported
-bot_instance = TelegramBot()
-bot_instance.start_in_thread()
+# Initialize and start the bot
+bot = TelegramBot()
+bot.start()
 
 if __name__ == '__main__':
-    # For standalone execution (not through Streamlit)
+    # For standalone execution
     bot = TelegramBot()
     bot.run_bot()
